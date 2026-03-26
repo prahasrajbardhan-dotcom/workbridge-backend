@@ -1,30 +1,27 @@
 /**
- * WorkBridge AI — Main Server
- * Express API server for job search, saved jobs, and email alerts
+ * WorkBridge AI — Backend Server
+ * Powered by Groq AI (free) — visitors never need an API key
  */
 
 require('dotenv').config();
-const express = require('express');
-const helmet = require('helmet');
-const cors = require('cors');
-const rateLimit = require('express-rate-limit');
+const express    = require('express');
+const helmet     = require('helmet');
+const cors       = require('cors');
+const rateLimit  = require('express-rate-limit');
 
 const searchRoutes = require('./routes/search');
-const alertRoutes = require('./routes/alerts');
-const savedRoutes = require('./routes/saved');
-const { startAlertCron } = require('./services/alertCron');
+const alertRoutes  = require('./routes/alerts');
+const savedRoutes  = require('./routes/saved');
 const { errorHandler } = require('./middleware/errorHandler');
 
-const app = express();
+const app  = express();
 const PORT = process.env.PORT || 3001;
 
-// ─── Security middleware ───────────────────────────────
-app.use(helmet({
-  crossOriginResourcePolicy: { policy: 'cross-origin' }
-}));
+// Security
+app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 
-// ─── CORS ─────────────────────────────────────────────
-const allowedOrigins = [
+// CORS — allow your Netlify frontend
+const allowed = [
   process.env.FRONTEND_URL,
   'http://localhost:3000',
   'http://localhost:5500',
@@ -32,82 +29,50 @@ const allowedOrigins = [
 ].filter(Boolean);
 
 app.use(cors({
-  origin: (origin, callback) => {
-    // Allow requests with no origin (e.g. mobile apps, Postman)
-    if (!origin || allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      callback(new Error(`CORS: origin ${origin} not allowed`));
-    }
+  origin: (origin, cb) => {
+    if (!origin || allowed.includes(origin)) cb(null, true);
+    else cb(new Error(`CORS: ${origin} not allowed`));
   },
   credentials: true,
-  methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  methods: ['GET','POST','DELETE','OPTIONS'],
+  allowedHeaders: ['Content-Type']
 }));
 
-// ─── Body parsing ──────────────────────────────────────
 app.use(express.json({ limit: '10kb' }));
 
-// ─── Global rate limiting ──────────────────────────────
-const globalLimiter = rateLimit({
-  windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000,
-  max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 50,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: {
-    error: 'Too many requests. Please wait a few minutes before trying again.',
-    retryAfter: '15 minutes'
-  }
-});
-app.use('/api/', globalLimiter);
+// Rate limiting
+app.use('/api/', rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  message: { error: 'Too many requests. Please wait a few minutes.' }
+}));
 
-// Stricter limiter for AI search (it's expensive)
-const searchLimiter = rateLimit({
-  windowMs: 60 * 1000,        // 1 minute
-  max: 10,                    // 10 searches per minute
-  message: { error: 'Search rate limit exceeded. Please wait 1 minute.' }
-});
+app.use('/api/search', rateLimit({
+  windowMs: 60 * 1000,
+  max: 15,
+  message: { error: 'Search rate limit — please wait 1 minute.' }
+}), searchRoutes);
 
-// ─── Routes ───────────────────────────────────────────
-app.use('/api/search', searchLimiter, searchRoutes);
 app.use('/api/alerts', alertRoutes);
-app.use('/api/saved', savedRoutes);
+app.use('/api/saved',  savedRoutes);
 
-// ─── Health check ──────────────────────────────────────
-app.get('/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    service: 'WorkBridge AI Backend',
-    version: '1.0.0',
-    timestamp: new Date().toISOString(),
-    env: process.env.NODE_ENV
-  });
-});
+// Health check
+app.get('/health', (req, res) => res.json({
+  status: 'ok',
+  service: 'WorkBridge AI Backend',
+  version: '2.0.0',
+  ai: 'Groq (free)',
+  timestamp: new Date().toISOString()
+}));
 
-// ─── 404 handler ──────────────────────────────────────
-app.use('*', (req, res) => {
-  res.status(404).json({ error: `Route ${req.originalUrl} not found` });
-});
-
-// ─── Error handler ────────────────────────────────────
+app.use('*', (req, res) => res.status(404).json({ error: 'Not found' }));
 app.use(errorHandler);
 
-// ─── Start server ─────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`\n✅  WorkBridge AI backend running on http://localhost:${PORT}`);
-  console.log(`📋  Health check: http://localhost:${PORT}/health`);
-  console.log(`🔍  Search API:   http://localhost:${PORT}/api/search`);
-  console.log(`🔔  Alerts API:   http://localhost:${PORT}/api/alerts`);
-  console.log(`💾  Saved API:    http://localhost:${PORT}/api/saved`);
-  console.log(`\n🌍  Environment: ${process.env.NODE_ENV || 'development'}\n`);
-
-  // Start scheduled email alert cron job
-  if (process.env.SENDGRID_API_KEY && process.env.SENDGRID_API_KEY !== 'SG.your-sendgrid-key-here') {
-    startAlertCron();
-    console.log(`⏰  Alert cron started: ${process.env.ALERT_CRON_SCHEDULE || '0 8 * * *'}\n`);
-  } else {
-    console.log(`⚠️  SendGrid not configured — email alerts disabled\n`);
-  }
+  console.log(`\n✅  WorkBridge AI running on http://localhost:${PORT}`);
+  console.log(`⚡  AI: Groq (free) — ${GROQ_MODEL || 'llama-3.3-70b-versatile'}`);
+  console.log(`🌍  Frontend: ${process.env.FRONTEND_URL || 'not set'}\n`);
 });
 
+const GROQ_MODEL = 'llama-3.3-70b-versatile';
 module.exports = app;
